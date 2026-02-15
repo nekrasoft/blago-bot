@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 MEDIA_GROUP_WAIT_SECONDS = 2.0
 CONTEXT_MESSAGE_MAX_AGE_SECONDS = 30 * 60
 CONTEXT_BUFFER_SIZE = 30
+UNAUTHORIZED_CHAT_TEXT = (
+    "Работа бота в этом чате не разрешена. "
+    "Бот покидает чат."
+)
 PROCUREMENT_LINK_PATTERN = re.compile(
     r"https?://(?:www\.)?zakupki\.gov\.ru/epz/order/\S+",
     re.IGNORECASE,
@@ -90,8 +94,12 @@ class TenderTelegramBot:
         self.pending_media_groups_lock = asyncio.Lock()
         self.recent_chat_texts: dict[tuple[int, int], deque[RecentChatText]] = {}
         self.recent_chat_texts_lock = asyncio.Lock()
+        self.denied_chat_ids: set[int] = set()
+        self.denied_chat_ids_lock = asyncio.Lock()
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self.ensure_group_allowed(update=update, bot=context.bot):
+            return
         if update.effective_message:
             await update.effective_message.reply_text(
                 "Бот активен. Пришлите .doc/.docx/.rar в группу. "
@@ -100,6 +108,8 @@ class TenderTelegramBot:
             )
 
     async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self.ensure_group_allowed(update=update, bot=context.bot):
+            return
         if update.effective_message:
             await update.effective_message.reply_text(
                 "Я обрабатываю .doc/.docx/.rar в группе и возвращаю саммари по тендерной документации. "
@@ -107,6 +117,8 @@ class TenderTelegramBot:
             )
 
     async def handle_group_text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self.ensure_group_allowed(update=update, bot=context.bot):
+            return
         message = update.effective_message
         user = update.effective_user
         if not message or not user or user.is_bot:
@@ -125,6 +137,8 @@ class TenderTelegramBot:
         )
 
     async def handle_group_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self.ensure_group_allowed(update=update, bot=context.bot):
+            return
         message = update.effective_message
         user = update.effective_user
         if not message or not message.document:
@@ -359,6 +373,36 @@ class TenderTelegramBot:
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=CONTEXT_MESSAGE_MAX_AGE_SECONDS)
         while history and history[0].date < cutoff:
             history.popleft()
+
+    async def ensure_group_allowed(self, update: Update, bot: Bot) -> bool:
+        chat = update.effective_chat
+        if chat is None:
+            return True
+
+        if chat.type not in {"group", "supergroup"}:
+            return True
+
+        if chat.id in self.settings.whitelist_chat_ids:
+            return True
+
+        await self.notify_and_leave_unauthorized_chat(chat_id=chat.id, bot=bot)
+        return False
+
+    async def notify_and_leave_unauthorized_chat(self, chat_id: int, bot: Bot) -> None:
+        async with self.denied_chat_ids_lock:
+            if chat_id in self.denied_chat_ids:
+                return
+            self.denied_chat_ids.add(chat_id)
+
+        try:
+            await bot.send_message(chat_id=chat_id, text=UNAUTHORIZED_CHAT_TEXT)
+        except Exception:
+            logger.exception("Failed to send unauthorized message for chat %s", chat_id)
+
+        try:
+            await bot.leave_chat(chat_id=chat_id)
+        except Exception:
+            logger.exception("Failed to leave unauthorized chat %s", chat_id)
 
     async def extract_payload_texts(
         self,
