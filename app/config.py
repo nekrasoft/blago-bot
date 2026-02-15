@@ -48,10 +48,7 @@ def load_settings() -> Settings:
 def parse_whitelist_chat_ids(raw: str) -> frozenset[int]:
     value = raw.strip()
     if not value:
-        raise ValueError(
-            "WHITELIST_CHAT_IDS is not set. "
-            "Provide comma-separated Telegram group chat IDs."
-        )
+        return frozenset()
 
     chat_ids: set[int] = set()
     for token in value.split(","):
@@ -66,8 +63,6 @@ def parse_whitelist_chat_ids(raw: str) -> frozenset[int]:
             ) from exc
 
     if not chat_ids:
-        raise ValueError(
-            "WHITELIST_CHAT_IDS does not contain valid IDs."
-        )
+        return frozenset()
 
     return frozenset(chat_ids)

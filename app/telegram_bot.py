@@ -10,7 +10,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from telegram import Bot, Message, Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    ChatMemberHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 from .archive_parser import (
     ArchiveExtractionError,
@@ -78,6 +85,9 @@ class TenderTelegramBot:
             chunk_overlap=settings.chunk_overlap,
         )
         self.app = Application.builder().token(settings.telegram_bot_token).build()
+        self.app.add_handler(
+            ChatMemberHandler(self.handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER)
+        )
         self.app.add_handler(CommandHandler("start", self.start))
         self.app.add_handler(CommandHandler("help", self.help))
         self.app.add_handler(
@@ -96,6 +106,22 @@ class TenderTelegramBot:
         self.recent_chat_texts_lock = asyncio.Lock()
         self.denied_chat_ids: set[int] = set()
         self.denied_chat_ids_lock = asyncio.Lock()
+
+    async def handle_my_chat_member(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat_member_update = update.my_chat_member
+        if not chat_member_update:
+            return
+
+        chat = chat_member_update.chat
+        old_status = chat_member_update.old_chat_member.status
+        new_status = chat_member_update.new_chat_member.status
+        print(
+            "[bot-membership]"
+            f" chat_id={chat.id}"
+            f" title={chat.title!r}"
+            f" old_status={old_status}"
+            f" new_status={new_status}"
+        )
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self.ensure_group_allowed(update=update, bot=context.bot):
@@ -380,6 +406,17 @@ class TenderTelegramBot:
             return True
 
         if chat.type not in {"group", "supergroup"}:
+            return True
+
+        message = update.effective_message
+        if message:
+            print(
+                "[group-message]"
+                f" chat_id={message.chat.id}"
+                f" message_id={message.message_id}"
+            )
+
+        if not self.settings.whitelist_chat_ids:
             return True
 
         if chat.id in self.settings.whitelist_chat_ids:
