@@ -36,7 +36,7 @@ cp .env.example .env
 Запуск:
 
 ```bash
-python main.py
+python3 main.py
 ```
 
 ## Настройка Telegram
