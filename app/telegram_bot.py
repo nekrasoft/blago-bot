@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import re
 import tempfile
@@ -40,6 +41,21 @@ CONTEXT_BUFFER_SIZE = 30
 UNAUTHORIZED_CHAT_TEXT = (
     "Работа бота в этом чате не разрешена. "
     "Бот покидает чат."
+)
+SUMMARY_HEADING_PREFIXES = (
+    "файл",
+    "кратко о закупке",
+    "тип закупки",
+    "тип процедуры",
+    "территориальность",
+    "unit-экономика",
+    "unit экономика",
+    "основные требования",
+    "документы/условия участия",
+    "ключевые сроки",
+    "деньги/гарантии",
+    "риски и что уточнить",
+    "не обработаны файлы",
 )
 PROCUREMENT_LINK_PATTERN = re.compile(
     r"https?://(?:www\.)?zakupki\.gov\.ru/epz/order/\S+",
@@ -218,10 +234,11 @@ class TenderTelegramBot:
                 extracted_parts=extracted_parts,
                 fallback_name=fallback_name,
             )
+            formatted_summary = format_summary_for_telegram(summary)
 
             await status_message.delete()
-            for part in split_for_telegram(summary):
-                await message.reply_text(part)
+            for part in split_for_telegram(formatted_summary):
+                await message.reply_text(part, parse_mode="HTML")
         except (DocumentExtractionError, ArchiveExtractionError):
             logger.exception("Document extraction failed")
             await status_message.edit_text(
@@ -297,10 +314,11 @@ class TenderTelegramBot:
                 context_text=context_text,
                 bot=bot,
             )
+            formatted_summary = format_summary_for_telegram(summary)
 
             await status_message.delete()
-            for part in split_for_telegram(summary):
-                await bot.send_message(chat_id=pending.chat_id, text=part)
+            for part in split_for_telegram(formatted_summary):
+                await bot.send_message(chat_id=pending.chat_id, text=part, parse_mode="HTML")
         except (DocumentExtractionError, ArchiveExtractionError):
             logger.exception("Media group extraction failed")
             await status_message.edit_text(
@@ -566,6 +584,36 @@ def split_for_telegram(text: str, limit: int = 3900) -> list[str]:
         parts.append("\n".join(current).strip())
 
     return [part for part in parts if part]
+
+
+def format_summary_for_telegram(text: str) -> str:
+    lines = text.splitlines()
+    formatted: list[str] = []
+
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if not stripped:
+            formatted.append("")
+            continue
+
+        cleaned = stripped.lstrip("-• ").strip()
+        if is_summary_heading(cleaned):
+            heading, separator, tail = cleaned.partition(":")
+            heading_html = f"<b>{html.escape((heading + separator).strip())}</b>"
+            if tail.strip():
+                formatted.append(f"{heading_html} {html.escape(tail.strip())}")
+            else:
+                formatted.append(heading_html)
+            continue
+
+        formatted.append(html.escape(stripped))
+
+    return "\n".join(formatted).strip()
+
+
+def is_summary_heading(line: str) -> bool:
+    normalized = line.lower().strip()
+    return any(normalized.startswith(prefix) for prefix in SUMMARY_HEADING_PREFIXES)
 
 
 def detect_document_extension(file_name: str, mime_type: str | None) -> str:
