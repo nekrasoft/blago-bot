@@ -144,7 +144,7 @@ class TenderTelegramBot:
             return
         if update.effective_message:
             await update.effective_message.reply_text(
-                "Бот активен. Пришлите .doc/.docx/.rar в группу. "
+                "Бот активен. Пришлите .doc/.docx/.xlsx/.pdf/.rar в группу. "
                 "Если файлов несколько в одном сообщении, сделаю общее саммари. "
                 "Текст перед пакетом (например ссылка на закупку и цена) тоже учитываю."
             )
@@ -154,7 +154,7 @@ class TenderTelegramBot:
             return
         if update.effective_message:
             await update.effective_message.reply_text(
-                "Я обрабатываю .doc/.docx/.rar в группе и возвращаю саммари по тендерной документации. "
+                "Я обрабатываю .doc/.docx/.xlsx/.pdf/.rar в группе и возвращаю саммари по тендерной документации. "
                 "Для пакета файлов также учитываю последнее текстовое сообщение автора."
             )
 
@@ -243,7 +243,8 @@ class TenderTelegramBot:
             logger.exception("Document extraction failed")
             await status_message.edit_text(
                 "Не удалось извлечь текст из файла. Для .doc нужен LibreOffice/antiword/catdoc, "
-                "для .rar нужен unrar/7z/bsdtar/unar."
+                "для .rar нужен unrar/7z/bsdtar/unar. "
+                "Для сканированных .pdf может понадобиться OCR."
             )
         except Exception:
             logger.exception("Failed to process document")
@@ -629,6 +630,13 @@ def detect_document_extension(file_name: str, mime_type: str | None) -> str:
         == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     ):
         return ".docx"
+    if normalized_mime == "application/pdf":
+        return ".pdf"
+    if normalized_mime in {
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }:
+        return ".xlsx"
     if normalized_mime in {"application/vnd.rar", "application/x-rar-compressed"}:
         return ".rar"
 

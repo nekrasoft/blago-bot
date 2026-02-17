@@ -6,8 +6,10 @@ import tempfile
 from pathlib import Path
 
 from docx import Document
+from openpyxl import load_workbook
+from pypdf import PdfReader
 
-SUPPORTED_EXTENSIONS = {".docx", ".doc"}
+SUPPORTED_EXTENSIONS = {".docx", ".doc", ".xlsx", ".pdf"}
 
 
 class DocumentExtractionError(RuntimeError):
@@ -33,6 +35,10 @@ def extract_document_text(file_path: Path) -> str:
         return extract_docx_text(file_path)
     if suffix == ".doc":
         return extract_doc_text(file_path)
+    if suffix == ".xlsx":
+        return extract_xlsx_text(file_path)
+    if suffix == ".pdf":
+        return extract_pdf_text(file_path)
     raise UnsupportedDocumentTypeError(
         f"Unsupported document extension: {suffix or '<none>'}. "
         f"Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
@@ -79,6 +85,61 @@ def extract_doc_text(file_path: Path) -> str:
         "Cannot parse .doc file. Install one of: LibreOffice, antiword, catdoc. "
         f"Details: {error_details}"
     )
+
+
+def extract_xlsx_text(file_path: Path) -> str:
+    workbook = load_workbook(filename=str(file_path), data_only=True, read_only=True)
+    blocks: list[str] = []
+
+    for sheet in workbook.worksheets:
+        sheet_lines: list[str] = []
+        for row in sheet.iter_rows(values_only=True):
+            values = [_cell_to_text(value) for value in row]
+            values = [value for value in values if value]
+            if values:
+                sheet_lines.append(" | ".join(values))
+
+        if sheet_lines:
+            blocks.append(f"Лист: {sheet.title}")
+            blocks.extend(sheet_lines)
+
+    workbook.close()
+
+    text = _normalize_text("\n".join(blocks))
+    if not text:
+        raise DocumentExtractionError("Cannot parse .xlsx file: workbook is empty")
+    return text
+
+
+def extract_pdf_text(file_path: Path) -> str:
+    try:
+        reader = PdfReader(str(file_path))
+    except Exception as exc:
+        raise DocumentExtractionError(f"Cannot open .pdf file: {exc}") from exc
+
+    if reader.is_encrypted:
+        try:
+            reader.decrypt("")
+        except Exception as exc:
+            raise DocumentExtractionError(f"Cannot decrypt .pdf file: {exc}") from exc
+
+    blocks: list[str] = []
+    for index, page in enumerate(reader.pages, start=1):
+        try:
+            page_text = page.extract_text() or ""
+        except Exception:
+            page_text = ""
+        normalized = _normalize_text(page_text)
+        if normalized:
+            blocks.append(f"Страница {index}")
+            blocks.append(normalized)
+
+    text = _normalize_text("\n".join(blocks))
+    if not text:
+        raise DocumentExtractionError(
+            "Cannot parse .pdf file: no extractable text (possibly scanned document)"
+        )
+    return text
 
 
 def _extract_doc_via_libreoffice(file_path: Path) -> str:
@@ -144,6 +205,14 @@ def _decode_text_output(payload: bytes) -> str:
         except UnicodeDecodeError:
             continue
     return payload.decode("utf-8", errors="ignore")
+
+
+def _cell_to_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "Да" if value else "Нет"
+    return _clean_line(str(value))
 
 
 def _find_binary(*candidates: str) -> str | None:

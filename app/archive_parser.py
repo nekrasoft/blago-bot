@@ -34,7 +34,10 @@ def extract_archive_document_texts(archive_path: Path) -> list[tuple[str, str]]:
         )
 
         if not docs:
-            raise ArchiveExtractionError("Archive does not contain .doc/.docx files")
+            raise ArchiveExtractionError(
+                "Archive does not contain supported files "
+                f"({', '.join(sorted(SUPPORTED_EXTENSIONS))})"
+            )
 
         extracted: list[tuple[str, str]] = []
         errors: list[str] = []
