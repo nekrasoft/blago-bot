@@ -147,7 +147,7 @@ class TenderTelegramBot:
             return
         if update.effective_message:
             await update.effective_message.reply_text(
-                "Бот активен. Пришлите .doc/.docx/.xlsx/.pdf/.rar в группу. "
+                "Бот активен. Пришлите .doc/.docx/.xls/.xlsx/.pdf/.rar в группу. "
                 "Если файлов несколько в одном сообщении, сделаю общее саммари. "
                 "Текст перед пакетом (например ссылка на закупку и цена) тоже учитываю."
             )
@@ -157,7 +157,7 @@ class TenderTelegramBot:
             return
         if update.effective_message:
             await update.effective_message.reply_text(
-                "Я обрабатываю .doc/.docx/.xlsx/.pdf/.rar в группе и возвращаю саммари по тендерной документации. "
+                "Я обрабатываю .doc/.docx/.xls/.xlsx/.pdf/.rar в группе и возвращаю саммари по тендерной документации. "
                 "Для пакета файлов также учитываю последнее текстовое сообщение автора."
             )
 
@@ -635,11 +635,14 @@ def detect_document_extension(file_name: str, mime_type: str | None) -> str:
         return ".docx"
     if normalized_mime == "application/pdf":
         return ".pdf"
+    if normalized_mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+        return ".xlsx"
     if normalized_mime in {
         "application/vnd.ms-excel",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/msexcel",
+        "application/excel",
     }:
-        return ".xlsx"
+        return ".xls"
     if normalized_mime in {"application/vnd.rar", "application/x-rar-compressed"}:
         return ".rar"
 

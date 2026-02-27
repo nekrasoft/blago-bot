@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import time
 import shutil
 import subprocess
 import tempfile
@@ -8,8 +9,9 @@ from pathlib import Path
 from docx import Document
 from openpyxl import load_workbook
 from pypdf import PdfReader
+import xlrd
 
-SUPPORTED_EXTENSIONS = {".docx", ".doc", ".xlsx", ".pdf"}
+SUPPORTED_EXTENSIONS = {".docx", ".doc", ".xlsx", ".xls", ".pdf"}
 
 
 class DocumentExtractionError(RuntimeError):
@@ -37,6 +39,8 @@ def extract_document_text(file_path: Path) -> str:
         return extract_doc_text(file_path)
     if suffix == ".xlsx":
         return extract_xlsx_text(file_path)
+    if suffix == ".xls":
+        return extract_xls_text(file_path)
     if suffix == ".pdf":
         return extract_pdf_text(file_path)
     raise UnsupportedDocumentTypeError(
@@ -108,6 +112,43 @@ def extract_xlsx_text(file_path: Path) -> str:
     text = _normalize_text("\n".join(blocks))
     if not text:
         raise DocumentExtractionError("Cannot parse .xlsx file: workbook is empty")
+    return text
+
+
+def extract_xls_text(file_path: Path) -> str:
+    try:
+        workbook = xlrd.open_workbook(filename=str(file_path), on_demand=True)
+    except Exception as exc:
+        raise DocumentExtractionError(f"Cannot open .xls file: {exc}") from exc
+
+    blocks: list[str] = []
+
+    try:
+        for sheet_name in workbook.sheet_names():
+            sheet = workbook.sheet_by_name(sheet_name)
+            sheet_lines: list[str] = []
+
+            for row_idx in range(sheet.nrows):
+                values = [
+                    _xls_cell_to_text(
+                        cell=sheet.cell(row_idx, col_idx),
+                        datemode=workbook.datemode,
+                    )
+                    for col_idx in range(sheet.ncols)
+                ]
+                values = [value for value in values if value]
+                if values:
+                    sheet_lines.append(" | ".join(values))
+
+            if sheet_lines:
+                blocks.append(f"Лист: {sheet_name}")
+                blocks.extend(sheet_lines)
+    finally:
+        workbook.release_resources()
+
+    text = _normalize_text("\n".join(blocks))
+    if not text:
+        raise DocumentExtractionError("Cannot parse .xls file: workbook is empty")
     return text
 
 
@@ -213,6 +254,31 @@ def _cell_to_text(value: object) -> str:
     if isinstance(value, bool):
         return "Да" if value else "Нет"
     return _clean_line(str(value))
+
+
+def _xls_cell_to_text(cell: xlrd.sheet.Cell, datemode: int) -> str:
+    if cell.ctype in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK, xlrd.XL_CELL_ERROR):
+        return ""
+
+    if cell.ctype == xlrd.XL_CELL_BOOLEAN:
+        return "Да" if bool(cell.value) else "Нет"
+
+    if cell.ctype == xlrd.XL_CELL_DATE:
+        try:
+            dt_value = xlrd.xldate_as_datetime(cell.value, datemode)
+            if dt_value.time() == time(0, 0):
+                return dt_value.date().isoformat()
+            return dt_value.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return _clean_line(str(cell.value))
+
+    if cell.ctype == xlrd.XL_CELL_NUMBER:
+        number = float(cell.value)
+        if number.is_integer():
+            return str(int(number))
+        return _clean_line(str(number))
+
+    return _clean_line(str(cell.value))
 
 
 def _find_binary(*candidates: str) -> str | None:
