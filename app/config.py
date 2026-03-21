@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 @dataclass(frozen=True)
 class Settings:
     telegram_bot_token: str
+    max_bot_token: str
+    bot_platform: str
     openai_api_key: str
     whitelist_chat_ids: frozenset[int]
     openai_model: str = "gpt-4.1-mini"
@@ -22,19 +24,25 @@ class Settings:
 def load_settings() -> Settings:
     load_dotenv()
 
+    bot_platform = os.getenv("BOT_PLATFORM", "telegram").strip().lower()
     telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    max_bot_token = os.getenv("MAX_BOT_TOKEN", "").strip()
     openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
     whitelist_chat_ids = parse_whitelist_chat_ids(
         os.getenv("WHITELIST_CHAT_IDS", "")
     )
 
-    if not telegram_bot_token:
+    if bot_platform == "telegram" and not telegram_bot_token:
         raise ValueError("TELEGRAM_BOT_TOKEN is not set")
+    if bot_platform == "max" and not max_bot_token:
+        raise ValueError("MAX_BOT_TOKEN is not set")
     if not openai_api_key:
         raise ValueError("OPENAI_API_KEY is not set")
 
     return Settings(
         telegram_bot_token=telegram_bot_token,
+        max_bot_token=max_bot_token,
+        bot_platform=bot_platform,
         openai_api_key=openai_api_key,
         whitelist_chat_ids=whitelist_chat_ids,
         openai_model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini").strip() or "gpt-4.1-mini",
