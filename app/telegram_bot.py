@@ -147,7 +147,7 @@ class TenderTelegramBot:
             return
         if update.effective_message:
             await update.effective_message.reply_text(
-                "Бот активен. Пришлите .doc/.docx/.xls/.xlsx/.pdf/.rar в группу. "
+                "Бот активен. Пришлите .doc/.docx/.xls/.xlsx/.pdf/.rar/.zip/.odt/.ods в группу. "
                 "Если файлов несколько в одном сообщении, сделаю общее саммари. "
                 "Текст перед пакетом (например ссылка на закупку и цена) тоже учитываю."
             )
@@ -157,7 +157,7 @@ class TenderTelegramBot:
             return
         if update.effective_message:
             await update.effective_message.reply_text(
-                "Я обрабатываю .doc/.docx/.xls/.xlsx/.pdf/.rar в группе и возвращаю саммари по тендерной документации. "
+                "Я обрабатываю .doc/.docx/.xls/.xlsx/.pdf/.rar/.zip/.odt/.ods в группе и возвращаю саммари по тендерной документации. "
                 "Для пакета файлов также учитываю последнее текстовое сообщение автора."
             )
 
@@ -245,8 +245,9 @@ class TenderTelegramBot:
         except (DocumentExtractionError, ArchiveExtractionError):
             logger.exception("Document extraction failed")
             await status_message.edit_text(
-                "Не удалось извлечь текст из файла. Для .doc нужен LibreOffice/antiword/catdoc, "
-                "для .rar нужен unrar/7z/bsdtar/unar. "
+                "Не удалось извлечь текст из файла. Для .doc/.odt/.ods нужен LibreOffice, "
+                "для .doc также antiword/catdoc, "
+                "для .rar/.zip нужен unrar/7z/bsdtar/unar (.zip также через встроенный Python). "
                 "Для сканированных .pdf может понадобиться OCR."
             )
         except Exception:
@@ -645,6 +646,16 @@ def detect_document_extension(file_name: str, mime_type: str | None) -> str:
         return ".xls"
     if normalized_mime in {"application/vnd.rar", "application/x-rar-compressed"}:
         return ".rar"
+    if normalized_mime in {
+        "application/zip",
+        "application/x-zip-compressed",
+        "application/x-zip",
+    }:
+        return ".zip"
+    if normalized_mime == "application/vnd.oasis.opendocument.text":
+        return ".odt"
+    if normalized_mime == "application/vnd.oasis.opendocument.spreadsheet":
+        return ".ods"
 
     return ""
 

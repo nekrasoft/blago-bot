@@ -11,7 +11,7 @@ from openpyxl import load_workbook
 from pypdf import PdfReader
 import xlrd
 
-SUPPORTED_EXTENSIONS = {".docx", ".doc", ".xlsx", ".xls", ".pdf"}
+SUPPORTED_EXTENSIONS = {".docx", ".doc", ".xlsx", ".xls", ".pdf", ".odt", ".ods"}
 
 
 class DocumentExtractionError(RuntimeError):
@@ -43,6 +43,10 @@ def extract_document_text(file_path: Path) -> str:
         return extract_xls_text(file_path)
     if suffix == ".pdf":
         return extract_pdf_text(file_path)
+    if suffix == ".odt":
+        return extract_odt_text(file_path)
+    if suffix == ".ods":
+        return extract_ods_text(file_path)
     raise UnsupportedDocumentTypeError(
         f"Unsupported document extension: {suffix or '<none>'}. "
         f"Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
@@ -183,6 +187,24 @@ def extract_pdf_text(file_path: Path) -> str:
     return text
 
 
+def extract_odt_text(file_path: Path) -> str:
+    try:
+        return _extract_doc_via_libreoffice(file_path)
+    except Exception as exc:
+        raise DocumentExtractionError(
+            f"Не удалось разобрать .odt файл. Установите LibreOffice. Подробности: {exc}"
+        ) from exc
+
+
+def extract_ods_text(file_path: Path) -> str:
+    try:
+        return _extract_ods_via_libreoffice(file_path)
+    except Exception as exc:
+        raise DocumentExtractionError(
+            f"Не удалось разобрать .ods файл. Установите LibreOffice. Подробности: {exc}"
+        ) from exc
+
+
 def _extract_doc_via_libreoffice(file_path: Path) -> str:
     office_binary = _find_binary("soffice", "libreoffice")
     if not office_binary:
@@ -219,6 +241,45 @@ def _extract_doc_via_libreoffice(file_path: Path) -> str:
         text = extract_docx_text(converted)
         if not text:
             raise DocumentExtractionError("Converted .docx is empty")
+        return text
+
+
+def _extract_ods_via_libreoffice(file_path: Path) -> str:
+    office_binary = _find_binary("soffice", "libreoffice")
+    if not office_binary:
+        raise FileNotFoundError("LibreOffice binary not found (soffice/libreoffice)")
+
+    with tempfile.TemporaryDirectory(prefix="ods_convert_") as tmp_dir_name:
+        tmp_dir = Path(tmp_dir_name)
+        command = [
+            office_binary,
+            "--headless",
+            "--convert-to",
+            "xlsx",
+            "--outdir",
+            str(tmp_dir),
+            str(file_path),
+        ]
+        subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=90,
+        )
+
+        converted = tmp_dir / f"{file_path.stem}.xlsx"
+        if not converted.exists():
+            candidates = sorted(tmp_dir.glob("*.xlsx"))
+            if not candidates:
+                raise FileNotFoundError("Converted .xlsx was not created")
+            converted = candidates[0]
+
+        text = extract_xlsx_text(converted)
+        if not text:
+            raise DocumentExtractionError("Converted .xlsx is empty")
         return text
 
 

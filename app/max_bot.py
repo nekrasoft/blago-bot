@@ -147,7 +147,7 @@ class TenderMaxBot:
         await event.bot.send_message(
             chat_id=event.chat_id,
             text=(
-                "Бот активен. Пришлите .doc/.docx/.xls/.xlsx/.pdf/.rar в группу. "
+                "Бот активен. Пришлите .doc/.docx/.xls/.xlsx/.pdf/.rar/.zip/.odt/.ods в группу. "
                 "Если файлов несколько в одном сообщении, сделаю общее саммари. "
                 "Текст перед пакетом (например ссылка на закупку и цена) тоже учитываю."
             ),
@@ -158,7 +158,7 @@ class TenderMaxBot:
             return
         await event.message.answer(
             text=(
-                "Бот активен. Пришлите .doc/.docx/.xls/.xlsx/.pdf/.rar в группу. "
+                "Бот активен. Пришлите .doc/.docx/.xls/.xlsx/.pdf/.rar/.zip/.odt/.ods в группу. "
                 "Если файлов несколько в одном сообщении, сделаю общее саммари. "
                 "Текст перед пакетом (например ссылка на закупку и цена) тоже учитываю."
             ),
@@ -169,7 +169,7 @@ class TenderMaxBot:
             return
         await event.message.answer(
             text=(
-                "Я обрабатываю .doc/.docx/.xls/.xlsx/.pdf/.rar в группе и возвращаю "
+                "Я обрабатываю .doc/.docx/.xls/.xlsx/.pdf/.rar/.zip/.odt/.ods в группе и возвращаю "
                 "саммари по тендерной документации. "
                 "Для пакета файлов также учитываю последнее текстовое сообщение автора."
             ),
@@ -369,8 +369,9 @@ class TenderMaxBot:
                     message_id=status_mid,
                     text=(
                         "Не удалось извлечь текст из файла. "
-                        "Для .doc нужен LibreOffice/antiword/catdoc, "
-                        "для .rar нужен unrar/7z/bsdtar/unar. "
+                        "Для .doc/.odt/.ods нужен LibreOffice, "
+                        "для .doc также antiword/catdoc, "
+                        "для .rar/.zip нужен unrar/7z/bsdtar/unar (.zip также через встроенный Python). "
                         "Для сканированных .pdf может понадобиться OCR."
                     ),
                 )

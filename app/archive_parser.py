@@ -3,11 +3,12 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
+import zipfile
 from pathlib import Path
 
 from .docx_parser import SUPPORTED_EXTENSIONS, extract_document_text
 
-SUPPORTED_ARCHIVE_EXTENSIONS = {".rar"}
+SUPPORTED_ARCHIVE_EXTENSIONS = {".rar", ".zip"}
 MAX_ARCHIVE_DOCUMENTS = 30
 
 
@@ -64,13 +65,25 @@ def extract_archive_document_texts(archive_path: Path) -> list[tuple[str, str]]:
 
 
 def _extract_archive(archive_path: Path, output_dir: Path) -> None:
+    errors: list[str] = []
+
+    if archive_path.suffix.lower() == ".zip":
+        try:
+            _extract_zip_via_python(archive_path=archive_path, output_dir=output_dir)
+            return
+        except Exception as exc:
+            errors.append(f"zipfile: {exc}")
+
     commands = _build_extraction_commands(archive_path=archive_path, output_dir=output_dir)
     if not commands:
+        if errors:
+            raise ArchiveExtractionError(
+                f"Не удалось распаковать архив. Подробности: {'; '.join(errors)}"
+            )
         raise ArchiveExtractionError(
             "No archive extractor found. Install one of: unrar, 7z, bsdtar, unar"
         )
 
-    errors: list[str] = []
     for command in commands:
         try:
             subprocess.run(
@@ -88,9 +101,14 @@ def _extract_archive(archive_path: Path, output_dir: Path) -> None:
 
     raise ArchiveExtractionError(
         "Failed to unpack archive. "
-        "Make sure the .rar is not encrypted or corrupted. "
+        "Make sure the archive is not encrypted or corrupted. "
         f"Details: {'; '.join(errors)}"
     )
+
+
+def _extract_zip_via_python(archive_path: Path, output_dir: Path) -> None:
+    with zipfile.ZipFile(str(archive_path), "r") as zf:
+        zf.extractall(str(output_dir))
 
 
 def _build_extraction_commands(archive_path: Path, output_dir: Path) -> list[list[str]]:
