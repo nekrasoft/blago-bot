@@ -42,6 +42,10 @@ UNAUTHORIZED_CHAT_TEXT = (
     "Работа бота в этом чате не разрешена. "
     "Бот покидает чат."
 )
+MISSING_CONTEXT_TEXT = (
+    "Перед пакетом файлов сначала отправьте текстовое сообщение с контекстом "
+    "от этого же пользователя."
+)
 SUMMARY_HEADING_PREFIXES = (
     "файл",
     "кратко о закупке",
@@ -149,7 +153,7 @@ class TenderTelegramBot:
             await update.effective_message.reply_text(
                 "Бот активен. Пришлите .doc/.docx/.xls/.xlsx/.pdf/.rar/.zip/.odt/.ods в группу. "
                 "Если файлов несколько в одном сообщении, сделаю общее саммари. "
-                "Текст перед пакетом (например ссылка на закупку и цена) тоже учитываю."
+                "Файлы обрабатываю только если перед пакетом есть текст от этого же автора."
             )
 
     async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -158,7 +162,7 @@ class TenderTelegramBot:
         if update.effective_message:
             await update.effective_message.reply_text(
                 "Я обрабатываю .doc/.docx/.xls/.xlsx/.pdf/.rar/.zip/.odt/.ods в группе и возвращаю саммари по тендерной документации. "
-                "Для пакета файлов также учитываю последнее текстовое сообщение автора."
+                "Перед пакетом файлов нужно текстовое сообщение от того же автора."
             )
 
     async def handle_group_text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -167,6 +171,8 @@ class TenderTelegramBot:
         message = update.effective_message
         user = update.effective_user
         if not message or not user or user.is_bot:
+            return
+        if user.id != self.settings.allowed_source_user_id:
             return
 
         text = (message.text or "").strip()
@@ -186,7 +192,9 @@ class TenderTelegramBot:
             return
         message = update.effective_message
         user = update.effective_user
-        if not message or not message.document:
+        if not message or not message.document or not user or user.is_bot:
+            return
+        if user.id != self.settings.allowed_source_user_id:
             return
 
         document = message.document
@@ -217,6 +225,7 @@ class TenderTelegramBot:
         await self.process_single_document(
             message=message,
             payload=payload,
+            sender_user_id=user.id if user else None,
             bot=context.bot,
         )
 
@@ -224,10 +233,21 @@ class TenderTelegramBot:
         self,
         message: Message,
         payload: DocumentPayload,
+        sender_user_id: int | None,
         bot: Bot,
     ) -> None:
-        status_message = await message.reply_text("Получил документ, извлекаю текст...")
+        status_message = await message.reply_text("Получил документ, проверяю контекст...")
         try:
+            context_text = await self.find_recent_text_message(
+                chat_id=message.chat_id,
+                user_id=sender_user_id,
+                before_message_id=message.message_id,
+            )
+            if not context_text:
+                await status_message.edit_text(MISSING_CONTEXT_TEXT)
+                return
+
+            await status_message.edit_text("Контекст найден, извлекаю текст...")
             extracted_parts = await self.extract_payload_texts(payload=payload, bot=bot)
             await status_message.edit_text("Текст извлечен, готовлю саммари...")
             fallback_name = payload.file_name
@@ -236,6 +256,7 @@ class TenderTelegramBot:
             summary = await self.summarize_extracted_parts(
                 extracted_parts=extracted_parts,
                 fallback_name=fallback_name,
+                context_text=context_text,
             )
             formatted_summary = format_summary_for_telegram(summary)
 
@@ -308,12 +329,17 @@ class TenderTelegramBot:
 
         status_message = pending.status_message
         try:
-            await status_message.edit_text("Пакет получен, извлекаю текст из всех файлов...")
+            await status_message.edit_text("Пакет получен, проверяю контекст...")
             context_text = await self.find_recent_text_message(
                 chat_id=pending.chat_id,
                 user_id=pending.source_user_id,
                 before_message_id=pending.first_message_id,
             )
+            if not context_text:
+                await status_message.edit_text(MISSING_CONTEXT_TEXT)
+                return
+
+            await status_message.edit_text("Контекст найден, извлекаю текст из всех файлов...")
             summary = await self.build_combined_summary(
                 documents=pending.documents,
                 context_text=context_text,

@@ -46,6 +46,10 @@ UNAUTHORIZED_CHAT_TEXT = (
     "Работа бота в этом чате не разрешена. "
     "Бот покидает чат."
 )
+MISSING_CONTEXT_TEXT = (
+    "Перед пакетом файлов сначала отправьте текстовое сообщение с контекстом "
+    "от этого же пользователя."
+)
 SUMMARY_HEADING_PREFIXES = (
     "файл",
     "кратко о закупке",
@@ -149,7 +153,7 @@ class TenderMaxBot:
             text=(
                 "Бот активен. Пришлите .doc/.docx/.xls/.xlsx/.pdf/.rar/.zip/.odt/.ods в группу. "
                 "Если файлов несколько в одном сообщении, сделаю общее саммари. "
-                "Текст перед пакетом (например ссылка на закупку и цена) тоже учитываю."
+                "Файлы обрабатываю только если перед пакетом есть текст от этого же автора."
             ),
         )
 
@@ -160,7 +164,7 @@ class TenderMaxBot:
             text=(
                 "Бот активен. Пришлите .doc/.docx/.xls/.xlsx/.pdf/.rar/.zip/.odt/.ods в группу. "
                 "Если файлов несколько в одном сообщении, сделаю общее саммари. "
-                "Текст перед пакетом (например ссылка на закупку и цена) тоже учитываю."
+                "Файлы обрабатываю только если перед пакетом есть текст от этого же автора."
             ),
         )
 
@@ -171,7 +175,7 @@ class TenderMaxBot:
             text=(
                 "Я обрабатываю .doc/.docx/.xls/.xlsx/.pdf/.rar/.zip/.odt/.ods в группе и возвращаю "
                 "саммари по тендерной документации. "
-                "Для пакета файлов также учитываю последнее текстовое сообщение автора."
+                "Перед пакетом файлов нужно текстовое сообщение от того же автора."
             ),
         )
 
@@ -192,6 +196,9 @@ class TenderMaxBot:
             return
 
         user_id = sender.user_id
+        if user_id != self.settings.allowed_source_user_id:
+            return
+
         body = message.body
         if body is None:
             return
@@ -313,10 +320,26 @@ class TenderMaxBot:
         is_single = len(pending.documents) == 1
 
         try:
+            await self.bot.edit_message(
+                message_id=status_mid,
+                text="Пакет получен, проверяю контекст...",
+            )
+            context_text = await self._find_recent_text_message(
+                chat_id=pending.chat_id,
+                user_id=pending.source_user_id,
+                before_message_seq=pending.first_message_seq,
+            )
+            if not context_text:
+                await self.bot.edit_message(
+                    message_id=status_mid,
+                    text=MISSING_CONTEXT_TEXT,
+                )
+                return
+
             if is_single:
                 await self.bot.edit_message(
                     message_id=status_mid,
-                    text="Получил документ, извлекаю текст...",
+                    text="Контекст найден, извлекаю текст...",
                 )
                 payload = pending.documents[0]
                 extracted_parts = await self._extract_payload_texts(payload)
@@ -334,19 +357,15 @@ class TenderMaxBot:
                 summary = await self._summarize_extracted_parts(
                     extracted_parts=extracted_parts,
                     fallback_name=fallback_name,
+                    context_text=context_text,
                 )
             else:
                 await self.bot.edit_message(
                     message_id=status_mid,
                     text=(
-                        f"Пакет получен ({len(pending.documents)} файлов), "
+                        f"Контекст найден, пакет ({len(pending.documents)} файлов), "
                         "извлекаю текст из всех файлов..."
                     ),
-                )
-                context_text = await self._find_recent_text_message(
-                    chat_id=pending.chat_id,
-                    user_id=pending.source_user_id,
-                    before_message_seq=pending.first_message_seq,
                 )
                 summary = await self._build_combined_summary(
                     documents=pending.documents,

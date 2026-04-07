@@ -13,6 +13,7 @@ class Settings:
     bot_platform: str
     openai_api_key: str
     whitelist_chat_ids: frozenset[int]
+    allowed_source_user_id: int
     openai_model: str = "gpt-4.1-mini"
     summary_language: str = "ru"
     max_doc_chars: int = 120_000
@@ -31,6 +32,10 @@ def load_settings() -> Settings:
     whitelist_chat_ids = parse_whitelist_chat_ids(
         os.getenv("WHITELIST_CHAT_IDS", "")
     )
+    allowed_source_user_id = parse_required_user_id(
+        os.getenv("ALLOWED_SOURCE_USER_ID", ""),
+        var_name="ALLOWED_SOURCE_USER_ID",
+    )
 
     if bot_platform == "telegram" and not telegram_bot_token:
         raise ValueError("TELEGRAM_BOT_TOKEN is not set")
@@ -45,6 +50,7 @@ def load_settings() -> Settings:
         bot_platform=bot_platform,
         openai_api_key=openai_api_key,
         whitelist_chat_ids=whitelist_chat_ids,
+        allowed_source_user_id=allowed_source_user_id,
         openai_model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini").strip() or "gpt-4.1-mini",
         summary_language=os.getenv("SUMMARY_LANGUAGE", "ru").strip() or "ru",
         max_doc_chars=max(1_000, int(os.getenv("MAX_DOC_CHARS", "120000"))),
@@ -74,3 +80,13 @@ def parse_whitelist_chat_ids(raw: str) -> frozenset[int]:
         return frozenset()
 
     return frozenset(chat_ids)
+
+
+def parse_required_user_id(raw: str, var_name: str) -> int:
+    value = raw.strip()
+    if not value:
+        raise ValueError(f"{var_name} is not set")
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"Invalid user ID in {var_name}: {value!r}") from exc
