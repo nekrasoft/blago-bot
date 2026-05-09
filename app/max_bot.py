@@ -14,6 +14,7 @@ import aiohttp
 from maxapi import Bot, Dispatcher
 from maxapi.enums.chat_type import ChatType
 from maxapi.enums.parse_mode import ParseMode
+from maxapi.enums.upload_type import UploadType
 from maxapi.types import (
     BotAdded,
     BotRemoved,
@@ -22,12 +23,13 @@ from maxapi.types import (
     MessageCreated,
 )
 from maxapi.types.attachments.file import File as MaxFile
+from maxapi.types.input_media import InputMediaBuffer
 from maxapi.types.message import MessageBody
 
 from .archive_parser import (
     ArchiveExtractionError,
     SUPPORTED_ARCHIVE_EXTENSIONS,
-    extract_archive_document_texts,
+    extract_archive_contents,
 )
 from .config import Settings
 from .docx_parser import (
@@ -42,6 +44,7 @@ logger = logging.getLogger(__name__)
 FILE_GROUP_WAIT_SECONDS = 2.0
 CONTEXT_MESSAGE_MAX_AGE_MS = 30 * 60 * 1000
 CONTEXT_BUFFER_SIZE = 30
+ARCHIVE_IMAGE_MESSAGE_BATCH_SIZE = 10
 UNAUTHORIZED_CHAT_TEXT = (
     "Работа бота в этом чате не разрешена. "
     "Бот покидает чат."
@@ -80,6 +83,21 @@ class DocumentPayload:
     download_url: str
     file_name: str
     extension: str
+
+
+@dataclass
+class ArchiveImagePayload:
+    archive_name: str
+    inner_name: str
+    file_name: str
+    data: bytes
+
+
+@dataclass
+class ExtractedPayloadParts:
+    text_parts: list[tuple[str, str]]
+    archive_images: list[ArchiveImagePayload] = field(default_factory=list)
+    skipped_archive_images: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -154,7 +172,8 @@ class TenderMaxBot:
             text=(
                 "Бот активен. Пришлите .doc/.docx/.xls/.xlsx/.pdf/.rar/.zip/.odt/.ods в группу. "
                 "Если файлов несколько в одном сообщении, сделаю общее саммари. "
-                "Файлы обрабатываю только если перед пакетом есть текст от этого же автора."
+                "Файлы обрабатываю только если перед пакетом есть текст от этого же автора. "
+                "Картинки из архивов отправлю отдельным сообщением."
             ),
         )
 
@@ -165,7 +184,8 @@ class TenderMaxBot:
             text=(
                 "Бот активен. Пришлите .doc/.docx/.xls/.xlsx/.pdf/.rar/.zip/.odt/.ods в группу. "
                 "Если файлов несколько в одном сообщении, сделаю общее саммари. "
-                "Файлы обрабатываю только если перед пакетом есть текст от этого же автора."
+                "Файлы обрабатываю только если перед пакетом есть текст от этого же автора. "
+                "Картинки из архивов отправлю отдельным сообщением."
             ),
         )
 
@@ -176,7 +196,8 @@ class TenderMaxBot:
             text=(
                 "Я обрабатываю .doc/.docx/.xls/.xlsx/.pdf/.rar/.zip/.odt/.ods в группе и возвращаю "
                 "саммари по тендерной документации. "
-                "Перед пакетом файлов нужно текстовое сообщение от того же автора."
+                "Перед пакетом файлов нужно текстовое сообщение от того же автора. "
+                "Картинки из архивов отправляю отдельным сообщением в MAX."
             ),
         )
 
@@ -319,6 +340,8 @@ class TenderMaxBot:
 
         status_mid = pending.status_mid
         is_single = len(pending.documents) == 1
+        archive_images: list[ArchiveImagePayload] = []
+        skipped_archive_images: dict[str, int] = {}
 
         try:
             await self.bot.edit_message(
@@ -343,23 +366,32 @@ class TenderMaxBot:
                     text="Контекст найден, извлекаю текст...",
                 )
                 payload = pending.documents[0]
-                extracted_parts = await self._extract_payload_texts(payload)
+                payload_parts = await self._extract_payload_parts(payload)
+                extracted_parts = payload_parts.text_parts
+                archive_images = payload_parts.archive_images
+                skipped_archive_images = payload_parts.skipped_archive_images
 
-                await self.bot.edit_message(
-                    message_id=status_mid,
-                    text="Текст извлечен, готовлю саммари...",
-                )
-
-                fallback_name = payload.file_name
-                if len(extracted_parts) > 1:
-                    fallback_name = (
-                        f"{payload.file_name} ({len(extracted_parts)} файла)"
+                if extracted_parts:
+                    await self.bot.edit_message(
+                        message_id=status_mid,
+                        text="Текст извлечен, готовлю саммари...",
                     )
-                summary = await self._summarize_extracted_parts(
-                    extracted_parts=extracted_parts,
-                    fallback_name=fallback_name,
-                    context_text=context_text,
-                )
+
+                    fallback_name = payload.file_name
+                    if len(extracted_parts) > 1:
+                        fallback_name = (
+                            f"{payload.file_name} ({len(extracted_parts)} файла)"
+                        )
+                    summary = await self._summarize_extracted_parts(
+                        extracted_parts=extracted_parts,
+                        fallback_name=fallback_name,
+                        context_text=context_text,
+                    )
+                else:
+                    summary = (
+                        "В архиве не найдено документов для саммари. "
+                        "Изображения отправляю отдельным сообщением."
+                    )
             else:
                 await self.bot.edit_message(
                     message_id=status_mid,
@@ -368,7 +400,11 @@ class TenderMaxBot:
                         "извлекаю текст из всех файлов..."
                     ),
                 )
-                summary = await self._build_combined_summary(
+                (
+                    summary,
+                    archive_images,
+                    skipped_archive_images,
+                ) = await self._build_combined_summary(
                     documents=pending.documents,
                     context_text=context_text,
                 )
@@ -376,12 +412,19 @@ class TenderMaxBot:
             formatted_summary = _format_summary_html(summary)
             await self.bot.delete_message(message_id=status_mid)
 
-            for part in _split_message_text(formatted_summary):
-                await self.bot.send_message(
-                    chat_id=pending.chat_id,
-                    text=part,
-                    parse_mode=ParseMode.HTML,
-                )
+            if formatted_summary:
+                for part in _split_message_text(formatted_summary):
+                    await self.bot.send_message(
+                        chat_id=pending.chat_id,
+                        text=part,
+                        parse_mode=ParseMode.HTML,
+                    )
+
+            await self._send_archive_images(
+                chat_id=pending.chat_id,
+                images=archive_images,
+                skipped_by_archive=skipped_archive_images,
+            )
         except (DocumentExtractionError, ArchiveExtractionError):
             logger.exception("Ошибка извлечения текста из документов")
             if is_single:
@@ -421,16 +464,22 @@ class TenderMaxBot:
         self,
         payload: DocumentPayload,
     ) -> list[tuple[str, str]]:
+        return (await self._extract_payload_parts(payload)).text_parts
+
+    async def _extract_payload_parts(
+        self,
+        payload: DocumentPayload,
+    ) -> ExtractedPayloadParts:
         if payload.extension in SUPPORTED_EXTENSIONS:
             text = await self._download_and_extract_text(payload)
             if not text.strip():
                 raise DocumentExtractionError(
                     f"{payload.file_name}: пустой текст"
                 )
-            return [(payload.file_name, text)]
+            return ExtractedPayloadParts(text_parts=[(payload.file_name, text)])
 
         if payload.extension in SUPPORTED_ARCHIVE_EXTENSIONS:
-            return await self._download_and_extract_archive_texts(payload)
+            return await self._download_and_extract_archive_parts(payload)
 
         raise DocumentExtractionError(
             f"{payload.file_name}: unsupported extension {payload.extension}"
@@ -457,6 +506,14 @@ class TenderMaxBot:
         self,
         payload: DocumentPayload,
     ) -> list[tuple[str, str]]:
+        return (
+            await self._download_and_extract_archive_parts(payload)
+        ).text_parts
+
+    async def _download_and_extract_archive_parts(
+        self,
+        payload: DocumentPayload,
+    ) -> ExtractedPayloadParts:
         temp_path: Path | None = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -466,11 +523,31 @@ class TenderMaxBot:
                 temp_path = Path(temp_file.name)
 
             await _download_file(payload.download_url, temp_path)
-            extracted = extract_archive_document_texts(temp_path)
-            return [
+            contents = extract_archive_contents(temp_path)
+            text_parts = [
                 (f"{payload.file_name} / {inner_name}", text)
-                for inner_name, text in extracted
+                for inner_name, text in contents.documents
             ]
+            archive_images = [
+                ArchiveImagePayload(
+                    archive_name=payload.file_name,
+                    inner_name=image.relative_name,
+                    file_name=image.file_name,
+                    data=image.data,
+                )
+                for image in contents.images
+            ]
+            skipped_archive_images: dict[str, int] = {}
+            if contents.skipped_images_count:
+                skipped_archive_images[payload.file_name] = (
+                    contents.skipped_images_count
+                )
+
+            return ExtractedPayloadParts(
+                text_parts=text_parts,
+                archive_images=archive_images,
+                skipped_archive_images=skipped_archive_images,
+            )
         finally:
             if temp_path and temp_path.exists():
                 temp_path.unlink(missing_ok=True)
@@ -513,31 +590,114 @@ class TenderMaxBot:
         self,
         documents: list[DocumentPayload],
         context_text: str | None,
-    ) -> str:
+    ) -> tuple[str, list[ArchiveImagePayload], dict[str, int]]:
         extracted_parts: list[tuple[str, str]] = []
+        archive_images: list[ArchiveImagePayload] = []
+        skipped_archive_images: dict[str, int] = {}
         failed_files: list[str] = []
 
         for payload in documents:
             try:
-                parts = await self._extract_payload_texts(payload)
-                extracted_parts.extend(parts)
+                payload_parts = await self._extract_payload_parts(payload)
+                extracted_parts.extend(payload_parts.text_parts)
+                archive_images.extend(payload_parts.archive_images)
+                _merge_image_skip_counts(
+                    skipped_archive_images,
+                    payload_parts.skipped_archive_images,
+                )
             except Exception as exc:
                 failed_files.append(f"{payload.file_name}: {exc}")
 
         if not extracted_parts:
-            raise DocumentExtractionError("No files were extracted")
-
-        summary = await self._summarize_extracted_parts(
-            extracted_parts=extracted_parts,
-            fallback_name=f"Пакет документов ({len(extracted_parts)} файла)",
-            context_text=context_text,
-        )
+            if not archive_images:
+                raise DocumentExtractionError("No files were extracted")
+            summary = (
+                "В архиве не найдено документов для саммари. "
+                "Изображения отправляю отдельным сообщением."
+            )
+        else:
+            summary = await self._summarize_extracted_parts(
+                extracted_parts=extracted_parts,
+                fallback_name=f"Пакет документов ({len(extracted_parts)} файла)",
+                context_text=context_text,
+            )
 
         if failed_files:
             failures_text = "\n".join(f"- {item}" for item in failed_files)
             summary = f"{summary}\n\nНе обработаны файлы:\n{failures_text}"
 
-        return summary
+        return summary, archive_images, skipped_archive_images
+
+    # ------------------------------------------------------------------
+    # Отправка изображений из архивов
+    # ------------------------------------------------------------------
+
+    async def _send_archive_images(
+        self,
+        chat_id: int,
+        images: list[ArchiveImagePayload],
+        skipped_by_archive: dict[str, int],
+    ) -> None:
+        if not images and not skipped_by_archive:
+            return
+
+        try:
+            grouped_images = _group_archive_images(images)
+            for archive_name, archive_images in grouped_images.items():
+                total = len(archive_images)
+                skipped = skipped_by_archive.get(archive_name, 0)
+
+                for start in range(
+                    0,
+                    total,
+                    ARCHIVE_IMAGE_MESSAGE_BATCH_SIZE,
+                ):
+                    batch = archive_images[
+                        start : start + ARCHIVE_IMAGE_MESSAGE_BATCH_SIZE
+                    ]
+                    text = _build_archive_images_caption(
+                        archive_name=archive_name,
+                        start=start,
+                        batch_count=len(batch),
+                        total=total,
+                        skipped=skipped
+                        if start + len(batch) >= total
+                        else 0,
+                    )
+                    attachments = [
+                        InputMediaBuffer(
+                            buffer=image.data,
+                            filename=image.file_name,
+                            type=UploadType.IMAGE,
+                        )
+                        for image in batch
+                    ]
+                    await self.bot.send_message(
+                        chat_id=chat_id,
+                        text=text,
+                        attachments=attachments,
+                    )
+
+            archives_without_images = (
+                set(skipped_by_archive) - set(grouped_images)
+            )
+            for archive_name in archives_without_images:
+                skipped = skipped_by_archive[archive_name]
+                if skipped:
+                    await self.bot.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            f"Изображения из архива «{archive_name}» "
+                            f"не отправлены: {skipped} файл(ов) слишком "
+                            "большие или не удалось прочитать."
+                        ),
+                    )
+        except Exception:
+            logger.exception("Ошибка отправки изображений из архива")
+            await self.bot.send_message(
+                chat_id=chat_id,
+                text="Не удалось отправить изображения из архива.",
+            )
 
     # ------------------------------------------------------------------
     # Буфер контекстных текстовых сообщений
@@ -680,6 +840,42 @@ async def _download_file(url: str, dest_path: Path) -> None:
             resp.raise_for_status()
             data = await resp.read()
             dest_path.write_bytes(data)
+
+
+def _merge_image_skip_counts(
+    target: dict[str, int],
+    source: dict[str, int],
+) -> None:
+    for archive_name, count in source.items():
+        target[archive_name] = target.get(archive_name, 0) + count
+
+
+def _group_archive_images(
+    images: list[ArchiveImagePayload],
+) -> dict[str, list[ArchiveImagePayload]]:
+    grouped: dict[str, list[ArchiveImagePayload]] = {}
+    for image in images:
+        grouped.setdefault(image.archive_name, []).append(image)
+    return grouped
+
+
+def _build_archive_images_caption(
+    archive_name: str,
+    start: int,
+    batch_count: int,
+    total: int,
+    skipped: int,
+) -> str:
+    caption = f"Картинки из архива «{archive_name}»"
+    if total > ARCHIVE_IMAGE_MESSAGE_BATCH_SIZE:
+        end = start + batch_count
+        caption = f"{caption}: {start + 1}-{end} из {total}"
+    if skipped:
+        caption = (
+            f"{caption}\nНе отправлено изображений: {skipped} "
+            "файл(ов) слишком большие или не удалось прочитать."
+        )
+    return caption
 
 
 def _split_message_text(text: str, limit: int = 3800) -> list[str]:
