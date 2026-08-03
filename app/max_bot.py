@@ -37,6 +37,7 @@ from .docx_parser import (
     DocumentExtractionError,
     extract_document_text,
 )
+from .email_sender import SummaryEmailSender
 from .summarizer import TenderSummarizer
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,7 @@ class TenderMaxBot:
             chunk_size=settings.chunk_size,
             chunk_overlap=settings.chunk_overlap,
         )
+        self.email_sender = SummaryEmailSender.from_settings(settings)
         self.bot = Bot(token=settings.max_bot_token)
         self.dp = Dispatcher()
         self._register_handlers()
@@ -419,6 +421,16 @@ class TenderMaxBot:
                         text=part,
                         parse_mode=ParseMode.HTML,
                     )
+
+            email_subject = "Результат обработки: пакет документов"
+            if is_single:
+                email_subject = (
+                    f"Результат обработки: {pending.documents[0].file_name}"
+                )
+            await self.email_sender.send_summary(
+                subject=email_subject,
+                summary=summary,
+            )
 
             await self._send_archive_images(
                 chat_id=pending.chat_id,

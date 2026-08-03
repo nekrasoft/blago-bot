@@ -19,6 +19,12 @@ class Settings:
     max_doc_chars: int = 120_000
     chunk_size: int = 12_000
     chunk_overlap: int = 1_000
+    smtp_host: str = "smtp.mail.ru"
+    smtp_port: int = 465
+    smtp_username: str = "blagoservice@mail.ru"
+    smtp_password: str = ""
+    smtp_sender: str = "blagoservice@mail.ru"
+    email_recipient: str = "blagoservice@mail.ru"
 
 
 
@@ -29,6 +35,14 @@ def load_settings() -> Settings:
     telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     max_bot_token = os.getenv("MAX_BOT_TOKEN", "").strip()
     openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    email_recipient = (
+        os.getenv("EMAIL_RECIPIENT", "blagoservice@mail.ru").strip()
+        or "blagoservice@mail.ru"
+    )
+    smtp_username = (
+        os.getenv("SMTP_USERNAME", email_recipient).strip()
+        or email_recipient
+    )
     whitelist_chat_ids = parse_whitelist_chat_ids(
         os.getenv("WHITELIST_CHAT_IDS", "")
     )
@@ -56,6 +70,15 @@ def load_settings() -> Settings:
         max_doc_chars=max(1_000, int(os.getenv("MAX_DOC_CHARS", "120000"))),
         chunk_size=max(2_000, int(os.getenv("CHUNK_SIZE", "12000"))),
         chunk_overlap=max(0, int(os.getenv("CHUNK_OVERLAP", "1000"))),
+        smtp_host=os.getenv("SMTP_HOST", "smtp.mail.ru").strip() or "smtp.mail.ru",
+        smtp_port=int(os.getenv("SMTP_PORT", "465")),
+        smtp_username=smtp_username,
+        smtp_password=os.getenv("SMTP_PASSWORD", "").strip(),
+        smtp_sender=(
+            os.getenv("SMTP_SENDER", smtp_username).strip()
+            or smtp_username
+        ),
+        email_recipient=email_recipient,
     )
 
 

@@ -31,6 +31,7 @@ from .docx_parser import (
     DocumentExtractionError,
     extract_document_text,
 )
+from .email_sender import SummaryEmailSender
 from .summarizer import TenderSummarizer
 
 logger = logging.getLogger(__name__)
@@ -108,6 +109,7 @@ class TenderTelegramBot:
             chunk_size=settings.chunk_size,
             chunk_overlap=settings.chunk_overlap,
         )
+        self.email_sender = SummaryEmailSender.from_settings(settings)
         self.app = Application.builder().token(settings.telegram_bot_token).build()
         self.app.add_handler(
             ChatMemberHandler(self.handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER)
@@ -264,6 +266,10 @@ class TenderTelegramBot:
             await status_message.delete()
             for part in split_for_telegram(formatted_summary):
                 await message.reply_text(part, parse_mode="HTML")
+            await self.email_sender.send_summary(
+                subject=f"Результат обработки: {payload.file_name}",
+                summary=summary,
+            )
         except (DocumentExtractionError, ArchiveExtractionError):
             logger.exception("Document extraction failed")
             await status_message.edit_text(
@@ -351,6 +357,13 @@ class TenderTelegramBot:
             await status_message.delete()
             for part in split_for_telegram(formatted_summary):
                 await bot.send_message(chat_id=pending.chat_id, text=part, parse_mode="HTML")
+            await self.email_sender.send_summary(
+                subject=(
+                    "Результат обработки: пакет документов "
+                    f"({len(pending.documents)} файла)"
+                ),
+                summary=summary,
+            )
         except (DocumentExtractionError, ArchiveExtractionError):
             logger.exception("Media group extraction failed")
             await status_message.edit_text(
