@@ -1,0 +1,24 @@
+[Unit]
+Description=Local proxy for OpenAI requests
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=xray-openai
+Group=xray-openai
+ExecStart=/usr/local/bin/xray run -config /etc/blago/xray/config.json
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

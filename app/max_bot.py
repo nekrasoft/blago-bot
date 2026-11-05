@@ -124,6 +124,7 @@ class TenderMaxBot:
         self.settings = settings
         self.summarizer = TenderSummarizer(
             api_key=settings.openai_api_key,
+            proxy_url=settings.openai_proxy_url,
             model=settings.openai_model,
             language=settings.summary_language,
             max_doc_chars=settings.max_doc_chars,

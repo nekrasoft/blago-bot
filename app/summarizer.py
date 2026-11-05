@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, DefaultAsyncHttpxClient
 
 
 class TenderSummarizer:
@@ -14,8 +14,15 @@ class TenderSummarizer:
         max_doc_chars: int,
         chunk_size: int,
         chunk_overlap: int,
+        proxy_url: str = "",
     ) -> None:
-        self.client = AsyncOpenAI(api_key=api_key)
+        self.client = AsyncOpenAI(
+            api_key=api_key,
+            http_client=(
+                DefaultAsyncHttpxClient(proxy=proxy_url, trust_env=False)
+                if proxy_url else None
+            ),
+        )
         self.model = model
         self.language = language
         self.max_doc_chars = max_doc_chars

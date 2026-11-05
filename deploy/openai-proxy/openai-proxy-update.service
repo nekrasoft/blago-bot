@@ -1,0 +1,12 @@
+[Unit]
+Description=Validate and update OpenAI proxy subscription
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/blago/blago-bot
+ExecStart=/root/blago/blago-bot/.venv/bin/python deploy/openai-proxy/update_subscription.py
+Environment=TMPDIR=/tmp TEMP=/tmp TMP=/tmp
+UMask=0077
+TimeoutStartSec=90

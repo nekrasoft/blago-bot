@@ -14,6 +14,7 @@ class Settings:
     openai_api_key: str
     whitelist_chat_ids: frozenset[int]
     allowed_source_user_id: int
+    openai_proxy_url: str = ""
     openai_model: str = "gpt-4.1-mini"
     summary_language: str = "ru"
     max_doc_chars: int = 120_000
@@ -63,6 +64,7 @@ def load_settings() -> Settings:
         max_bot_token=max_bot_token,
         bot_platform=bot_platform,
         openai_api_key=openai_api_key,
+        openai_proxy_url=os.getenv("OPENAI_PROXY_URL", "").strip(),
         whitelist_chat_ids=whitelist_chat_ids,
         allowed_source_user_id=allowed_source_user_id,
         openai_model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini").strip() or "gpt-4.1-mini",
