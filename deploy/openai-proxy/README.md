@@ -48,3 +48,26 @@ existing API key for its connectivity probe. It does not send documents or invok
 paid generation during subscription checks. Failed refreshes log only the error
 class to avoid leaking URLs or credentials. Inspect secret files privately when
 investigating such failures.
+
+## Automatic recovery
+
+`openai-proxy-health.timer` runs the updater with `--health` two minutes after
+the previous check finishes. A healthy proxy requires no subscription download
+or restart. After two failed OpenAI `/v1/models` probes, it fetches the subscription
+and tests the selected node, then other compatible VLESS/TCP/REALITY nodes in order.
+Only a candidate passing an authenticated OpenAI probe is installed. The live
+port is checked after restart; failure restores the previous configuration.
+The selected profile is saved in the private environment file for future updates.
+HTTP 401 and 429 stop recovery without switching nodes. Other HTTP failures and
+network errors trigger recovery; if all candidates fail, the live config stays.
+A shared file lock prevents concurrent daily updates and recovery runs.
+
+```bash
+cp deploy/openai-proxy/openai-proxy-{health.service,health.timer,update.service} /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now openai-proxy-health.timer
+systemctl start openai-proxy-health.service
+journalctl -u openai-proxy-health.service -n 20 --no-pager
+```
+
+Recovery does not replay failed document batches: resend them after restoration.

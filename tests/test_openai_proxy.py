@@ -5,6 +5,7 @@ from pathlib import Path
 import socket
 import tempfile
 import unittest
+import httpx
 from unittest.mock import patch
 
 from openai import APIConnectionError
@@ -58,6 +59,75 @@ class OpenAIProxyTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SubscriptionTests(unittest.TestCase):
+    def test_healthy_proxy_does_not_fetch_subscription(self):
+        with patch.object(subscription, 'check_proxy') as check, \
+             patch.object(subscription, 'urlopen') as fetch:
+            subscription.update(health_only=True)
+        check.assert_called_once_with()
+        fetch.assert_not_called()
+
+    def test_account_errors_do_not_switch_nodes(self):
+        for status in (401, 429):
+            with self.subTest(status=status), \
+                 patch.object(subscription, 'dotenv_values', return_value={'OPENAI_API_KEY': 'test'}), \
+                 patch.object(subscription.httpx, 'Client') as client:
+                client.return_value.__enter__.return_value.get.return_value = httpx.Response(
+                    status, request=httpx.Request('GET', 'https://api.openai.com/v1/models'))
+                with self.assertRaises(subscription.OpenAIAccountError):
+                    subscription.update(health_only=True)
+
+    def test_failed_node_switches_only_after_candidate_probe(self):
+        first = self.profile()
+        second = self.profile()
+        second['remarks'] = 'fallback'
+        second['outbounds'][1]['settings'] = {'vnext': [{'address': 'candidate'}]}
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / 'config.json'
+            config.write_bytes(b'working')
+            with patch.object(subscription, 'CONFIG_PATH', config), \
+                 patch.object(subscription, 'dotenv_values', return_value={
+                     'VPN_SUBSCRIPTION_URL': 'https://example.com/subscription',
+                     'VPN_PROFILE_NAME': 'selected'}), \
+                 patch.object(subscription, 'urlopen') as fetch, \
+                 patch.object(subscription, 'check_proxy', side_effect=[
+                     httpx.ConnectTimeout('offline'), httpx.ConnectTimeout('offline'), None]), \
+                 patch.object(subscription, 'probe_config', side_effect=[httpx.ConnectTimeout('offline'), None]) as probe, \
+                 patch.object(subscription, 'set_key') as save, \
+                 patch.object(subscription.time, 'sleep'), \
+                 patch.object(subscription.os, 'chown'), \
+                 patch.object(subscription.grp, 'getgrnam') as group, \
+                 patch.object(subscription.subprocess, 'run'):
+                group.return_value.gr_gid = 0
+                fetch.return_value.__enter__.return_value.read.return_value = json.dumps([first, second]).encode()
+                subscription.update(health_only=True)
+                self.assertEqual(probe.call_count, 2)
+                save.assert_called_once_with(str(subscription.ENV_PATH), 'VPN_PROFILE_NAME', 'fallback')
+            self.assertEqual(json.loads(config.read_text())['outbounds'][0]['settings'],
+                             second['outbounds'][1]['settings'])
+
+    def test_failed_live_probe_restores_previous_configuration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / 'config.json'
+            config.write_bytes(b'working')
+            with patch.object(subscription, 'CONFIG_PATH', config), \
+                 patch.object(subscription, 'dotenv_values', return_value={
+                     'VPN_SUBSCRIPTION_URL': 'https://example.com/subscription',
+                     'VPN_PROFILE_NAME': 'selected'}), \
+                 patch.object(subscription, 'urlopen') as fetch, \
+                 patch.object(subscription, 'probe_config'), \
+                 patch.object(subscription, 'check_proxy', side_effect=httpx.ConnectTimeout('offline')), \
+                 patch.object(subscription, 'set_key') as save, \
+                 patch.object(subscription.time, 'sleep'), \
+                 patch.object(subscription.os, 'chown'), \
+                 patch.object(subscription.grp, 'getgrnam') as group, \
+                 patch.object(subscription.subprocess, 'run'):
+                group.return_value.gr_gid = 0
+                fetch.return_value.__enter__.return_value.read.return_value = json.dumps([self.profile()]).encode()
+                with self.assertRaises(httpx.ConnectTimeout):
+                    subscription.update()
+                save.assert_not_called()
+            self.assertEqual(config.read_bytes(), b'working')
+
     def profile(self):
         return {'remarks': 'selected', 'inbounds': [{'listen': '0.0.0.0'}], 'outbounds': [
             {'protocol': 'freedom'},
