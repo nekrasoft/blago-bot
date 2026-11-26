@@ -64,7 +64,8 @@ class OpenAIAccountError(RuntimeError):
 
 def check_proxy(port: int = 18080) -> None:
     key = dotenv_values('/root/blago/blago-bot/.env')['OPENAI_API_KEY']
-    with httpx.Client(proxy=f'http://127.0.0.1:{port}', trust_env=False, timeout=8) as client:
+    with httpx.Client(proxy=f'http://127.0.0.1:{port}', trust_env=False,
+                      timeout=httpx.Timeout(8, connect=15)) as client:
         response = client.get('https://api.openai.com/v1/models',
                               headers={'Authorization': 'Bearer ' + key})
         if response.status_code in (401, 429):

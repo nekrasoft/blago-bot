@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
+import httpx
 from openai import AsyncOpenAI, DefaultAsyncHttpxClient
 
 
@@ -18,6 +19,9 @@ class TenderSummarizer:
     ) -> None:
         self.client = AsyncOpenAI(
             api_key=api_key,
+            timeout=httpx.Timeout(600, connect=15),
+            # Allow the proxy health timer to recover before abandoning this chunk.
+            max_retries=8,
             http_client=(
                 DefaultAsyncHttpxClient(proxy=proxy_url, trust_env=False)
                 if proxy_url else None

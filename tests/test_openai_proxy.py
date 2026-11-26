@@ -6,9 +6,9 @@ import socket
 import tempfile
 import unittest
 import httpx
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
-from openai import APIConnectionError
+from openai import APIConnectionError, AuthenticationError
 
 from app.config import load_settings
 from app.summarizer import TenderSummarizer
@@ -21,6 +21,65 @@ spec.loader.exec_module(subscription)
 
 
 class OpenAIProxyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_network_failure_retries_only_failed_chunk(self):
+        summarizer = TenderSummarizer(
+            api_key='test', model='test', language='ru', max_doc_chars=100,
+            chunk_size=4, chunk_overlap=0,
+        )
+        requests = []
+
+        def respond(request):
+            content = json.loads(request.content)['messages'][1]['content']
+            requests.append(content)
+            if len(requests) == 2:
+                raise httpx.ConnectTimeout('temporary TLS failure', request=request)
+            return httpx.Response(200, json={
+                'id': 'test', 'object': 'chat.completion', 'created': 0, 'model': 'test',
+                'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': 'summary'},
+                             'finish_reason': 'stop'}],
+            })
+
+        try:
+            async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+                await summarizer.client.close()
+                summarizer.client = summarizer.client.with_options(http_client=client)
+                with patch('openai._base_client.anyio.sleep', new_callable=AsyncMock):
+                    self.assertEqual(await summarizer.summarize('abcdefgh'), 'summary')
+            self.assertEqual(len(requests), 4)
+            self.assertEqual(requests[1], requests[2])
+            self.assertNotEqual(requests[0], requests[1])
+            self.assertEqual(summarizer.client.timeout.connect, 15)
+        finally:
+            await summarizer.client.close()
+
+    async def test_retries_are_bounded_and_authentication_is_not_retried(self):
+        for status, expected_error, expected_calls in (
+            (None, APIConnectionError, 9), (401, AuthenticationError, 1),
+        ):
+            with self.subTest(status=status):
+                summarizer = TenderSummarizer(
+                    api_key='test', model='test', language='ru', max_doc_chars=100,
+                    chunk_size=100, chunk_overlap=0,
+                )
+                calls = []
+
+                def respond(request):
+                    calls.append(request)
+                    if status is None:
+                        raise httpx.ConnectTimeout('offline', request=request)
+                    return httpx.Response(status, json={'error': {'message': 'invalid key'}})
+
+                try:
+                    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+                        await summarizer.client.close()
+                        summarizer.client = summarizer.client.with_options(http_client=client)
+                        with patch('openai._base_client.anyio.sleep', new_callable=AsyncMock):
+                            with self.assertRaises(expected_error):
+                                await summarizer._ask_llm('instruction', 'content')
+                    self.assertEqual(len(calls), expected_calls)
+                finally:
+                    await summarizer.client.close()
+
     async def test_unavailable_proxy_never_connects_directly(self):
         received = []
 

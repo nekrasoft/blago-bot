@@ -71,3 +71,8 @@ journalctl -u openai-proxy-health.service -n 20 --no-pager
 ```
 
 Recovery does not replay failed document batches: resend them after restoration.
+The bot uses a 15-second connection timeout, matching the health check, and up to
+eight SDK retries with exponential backoff. A transient connection failure retries
+the current OpenAI request without repeating already summarized document chunks.
+If all retries fail, the batch still requires resending. Authentication errors are
+not retried; SDK retries for rate limits and server errors use the same retry limit.
